@@ -1,0 +1,384 @@
+# ============================================================================
+# DATA LAKEHOUSE - DOCKER COMPOSE
+# ============================================================================
+
+networks:
+  datalake-network:
+    driver: bridge
+    name: ${DOCKER_NETWORK:-datalake-network}
+
+volumes:
+  postgres-airflow-data:
+  minio-data:
+  airflow-logs: 
+  jupyter-data:
+
+services:
+
+  # ==========================================================================
+  # POSTGRESQL AIRFLOW (Metastore)
+  # ==========================================================================
+  postgres-airflow:
+    image: postgres:16-alpine
+    container_name: postgres-airflow
+    hostname: postgres-airflow
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: ${TZ}
+    volumes:
+      - postgres-airflow-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - datalake-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRFLOW_DB_USER} -d ${AIRFLOW_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # MINIO (Object Storage)
+  # ==========================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_REGION: ${MINIO_REGION}
+      TZ: ${TZ}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      - datalake-network
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ==========================================================================
+  # MINIO INIT (Cria buckets)
+  # ==========================================================================
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set datalake http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing datalake/${MINIO_BUCKET_BRONZE};
+      mc mb --ignore-existing datalake/${MINIO_BUCKET_SILVER};
+      mc mb --ignore-existing datalake/${MINIO_BUCKET_GOLD};
+      echo 'Buckets created!';
+      exit 0;
+      "
+    networks:
+      - datalake-network
+
+  
+  # ==========================================================================
+  # AIRFLOW INIT
+  # ==========================================================================
+  airflow-init:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-init
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres-airflow:5432/${AIRFLOW_DB_NAME}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      _AIRFLOW_WWW_USER_EMAIL: ${AIRFLOW_ADMIN_EMAIL}
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db init
+        airflow db migrate
+        airflow users create \
+          --username ${AIRFLOW_ADMIN_USER} \
+          --password ${AIRFLOW_ADMIN_PASSWORD} \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email ${AIRFLOW_ADMIN_EMAIL} || true
+        echo "Airflow initialized!"
+    networks:
+      - datalake-network
+
+  # ==========================================================================
+  # AIRFLOW WEBSERVER
+  # ==========================================================================
+  airflow-webserver:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-webserver
+    hostname: airflow-webserver
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres-airflow:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres-airflow:5432/${AIRFLOW_DB_NAME}
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: ${AIRFLOW__WEBSERVER__EXPOSE_CONFIG}
+      #POSTGRES_ERP_HOST: postgres-erp
+      #POSTGRES_ERP_PORT: 5432
+      #POSTGRES_ERP_DB: ${POSTGRES_DB}
+      #POSTGRES_ERP_USER: ${POSTGRES_USER}
+      #POSTGRES_ERP_PASSWORD: ${POSTGRES_PASSWORD}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      TZ: ${TZ}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./scripts:/opt/airflow/scripts
+      - ./config/airflow/requirements.txt:/opt/airflow/requirements.txt
+    command: >
+      bash -c "pip install --no-cache-dir -r /opt/airflow/requirements.txt && airflow webserver"
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    networks:
+      - datalake-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ==========================================================================
+  # AIRFLOW SCHEDULER
+  # ==========================================================================
+  airflow-scheduler:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-scheduler
+    hostname: airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres-airflow:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres-airflow:5432/${AIRFLOW_DB_NAME}
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+      #POSTGRES_ERP_HOST: postgres-erp
+      #POSTGRES_ERP_PORT: 5432
+      #POSTGRES_ERP_DB: ${POSTGRES_DB}
+      #POSTGRES_ERP_USER: ${POSTGRES_USER}
+      #POSTGRES_ERP_PASSWORD: ${POSTGRES_PASSWORD}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      TZ: ${TZ}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./scripts:/opt/airflow/scripts
+      - ./config/airflow/requirements.txt:/opt/airflow/requirements.txt
+    command: >
+      bash -c "pip install --no-cache-dir -r /opt/airflow/requirements.txt && airflow scheduler"
+    networks:
+      - datalake-network
+
+  # ==========================================================================
+  # SPARK MASTER
+  # ==========================================================================
+  spark-master:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-master
+    hostname: spark-master
+    restart: unless-stopped
+    environment:
+      SPARK_MODE: master
+      SPARK_MASTER_HOST: spark-master
+      SPARK_NO_DAEMONIZE: "true"
+      # Configurações MinIO/S3
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: $${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+      TZ: ${TZ}
+    ports:
+      - "7077:7077"      # Spark Master Port
+      - "8085:8080"      # Spark Master Web UI (alterada para evitar conflito)
+    command: >
+      bash -c "
+        /opt/spark/sbin/start-master.sh -h spark-master;
+        sleep infinity
+      "
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - datalake-network
+
+  # ==========================================================================
+  # SPARK WORKER 1
+  # ==========================================================================
+  spark-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker-1
+    hostname: spark-worker-1
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+      - minio
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: 1
+      SPARK_WORKER_MEMORY: 3g
+      SPARK_WORKER_WEBUI_PORT: 8081
+      # Configurações MinIO/S3
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+      TZ: ${TZ}
+    ports:
+      - "8086:8081"      # Spark Worker 1 Web UI
+    command: >
+      bash -c "
+        /opt/spark/sbin/start-worker.sh spark://spark-master:7077;
+        sleep infinity
+      "
+    networks:
+      - datalake-network
+
+  # ==========================================================================
+  # SPARK WORKER 2
+  # ==========================================================================
+  spark-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker-2
+    hostname: spark-worker-2
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+      - minio
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: 1
+      SPARK_WORKER_MEMORY: 3g
+      SPARK_WORKER_WEBUI_PORT: 8082
+      # Configurações MinIO/S3
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+      TZ: ${TZ}
+    ports:
+      - "8087:8082"      # Spark Worker 2 Web UI
+    command: >
+      bash -c "
+        /opt/spark/sbin/start-worker.sh spark://spark-master:7077;
+        sleep infinity
+      "
+    networks:
+      - datalake-network
+
+  # ==========================================================================
+  # SPARK WORKER 3
+  # ==========================================================================
+  spark-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker-3
+    hostname: spark-worker-3
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+      - minio
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: 1
+      SPARK_WORKER_MEMORY: 3g
+      SPARK_WORKER_WEBUI_PORT: 8083
+      # Configurações MinIO/S3
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+      TZ: ${TZ}
+    ports:
+      - "8088:8083"      # Spark Worker 3 Web UI
+    command: >
+      bash -c "
+        /opt/spark/sbin/start-worker.sh spark://spark-master:7077;
+        sleep infinity
+      "
+    networks:
+      - datalake-network
+
+  # ==========================================================================
+  # JUPYTER NOTEBOOK COM PYSPARK
+  # ==========================================================================
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    container_name: jupyter
+    hostname: jupyter
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+      - minio
+    environment:
+      SPARK_MASTER: spark://spark-master:7077
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      TZ: ${TZ}
+    ports:
+      - "8888:8888"
+    volumes:
+      # DIRETÓRIO LOCAL que aparecerá no Jupyter
+      - ./jupyter-notebooks:/home/jovyan/work
+      
+      # Ou, se preferir usar o diretório padrão do usuário root:
+      # - ./jupyter-notebooks:/root/work
+    networks:
+      - datalake-network
+    # Comando simples - volta ao original que funciona
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.notebook_dir=/home/jovyan/work
