@@ -19,6 +19,7 @@ sudo chmod -R 777 .
 
 # Cria o arquivo .env
 touch .env
+Utilizar o arquivo .env.example para as suas credenciais
 
 # Adiciona .env ao .gitignore para que o Git o ignore
 echo ".env" >> .gitignore
