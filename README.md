@@ -4,6 +4,7 @@
 ```bash
 git clone https://github.com/jeanlr/Hackathon-2025
 cd Hackathon-2025
+git fetch --all --prune
 # No terminal, execute os comandos abaixo: (Ajusta o dono das pastas para o usuário interno do Airflow (UID 50000))
 sudo chown -R 50000:0 dags logs plugins scripts
 # Garante permissão total de escrita:
