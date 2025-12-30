@@ -41,10 +41,13 @@ docker compose up -d
 # Entrar na url:
 http://127.0.0.1:8888/lab
 
-# Criar uma pasta chamada "silver"
-# Na pasta silver adicionar os notebooks:
+
+# Se não aparecer as pastas jupyter-notebooks, Criar uma pasta chamada "jupyter-notebooks".
+# Na pasta, criar uma outra chamada "silver" e adicionar os notebooks:
   1. base_telco
   2. base_cadastral
+  3. base_bureau
+  4. base_pagamento
 ```
 
 ## Airflow
