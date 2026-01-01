@@ -1,5 +1,33 @@
 #  Hackathon2025 - Projeto Squad 07 - Data Lake - Machine Learning
 
+## Arquitetura do projeto
+![bucket_bronze](/assets/arquitetura.jpg)
+---
+
+### Visão geral da arquitetura
+
+A arquitetura proposta implementa um Data Lakehouse moderno, containerizado e desacoplado, projetado para suportar ingestão, processamento e consumo de dados de forma confiável, segura e escalável.
+
+A solução é baseada em Docker Compose, permitindo reprodutibilidade do ambiente e isolamento de serviços.
+
+Essa abordagem atende tanto demandas analíticas quanto operacionais, suportando desde cargas batch até exploração avançada e ciência de dados.
+
+### Justificativa das escolhas
+
+- **MinIO (Object Storage – S3 Compatible)**  
+  Escolhido por ser escalável, performático e aderente ao padrão S3, evitando lock-in tecnológico e permitindo migração futura para cloud pública sem alterações no código.
+
+- **Apache Spark**
+  Proporciona processamento distribuído e escalável para grandes volumes de dados, sendo adequado para ELT/ETL, feature engineering e cargas analíticas complexas.
+
+- **Apache Airflow** 
+  Responsável pela orquestração, governança e observabilidade dos pipelines, garantindo reprocessamentos seguros, monitoramento e maior confiabilidade operacional.
+
+- **Jupyter Notebook**  
+  Oferece um ambiente flexível para exploração, validação e análises avançadas, integrado ao Spark, acelerando o ciclo analítico e reduzindo o tempo de experimentação.
+
+---
+
 ## Como subir o projeto?
 ```bash
 git clone https://github.com/jeanlr/Hackathon-2025
@@ -59,6 +87,8 @@ http://127.0.0.1:8888/lab
 ```bash
 # Entrar na url:
 http://localhost:8080
+
+# Na pasta dags há os scripts .py que processando os dados.
 
 ```
 
