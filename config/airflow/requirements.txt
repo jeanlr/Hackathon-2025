@@ -1,7 +1,0 @@
-psycopg2-binary
-boto3
-minio
-pandas
-pyarrow
-python-dotenv
-requests
