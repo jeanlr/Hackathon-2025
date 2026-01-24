@@ -1,14 +1,14 @@
 #  Hackathon2025 - Projeto Squad 07 - Data Lake - Machine Learning
 
-## Relação de pastas:
 
-```bash
-#silver:
- - Notebooks, Documentação das transformações de bronze para silver e também os books de variavéis.
+## 📚 Documentação -> Guia das pastas do projeto:
 
-#Gold:
- - Notebooks, Documentação das transformações de silver para gold e também ABT(Analytical Base Table).
-```
+<a href="https://docs.google.com/document/d/1AV6yWvac58gyzjWPPK_pfdPEGL-YIXHGmqLy3urQH3E/edit?usp=sharing" target="_blank">
+📄 Abrir documentação no Google Docs
+</a>
+
+---
+
 
 
 ## Arquitetura do projeto
