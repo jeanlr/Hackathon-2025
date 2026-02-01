@@ -579,6 +579,7 @@ def avaliar_modelo(X_train, y_train, X_test, y_test, modelo, nm_modelo):
 
     # Decile Analysis - Teste.
     scores = modelo.predict_proba(X_test)[:, 1]
+    scores = ((1 - scores) * 1000).round(0)
     noise = np.random.uniform(0, 0.0001, size=scores.shape)     # Adiciona um pequeno ruído.
     scores += noise
     deciles = pd.qcut(scores, q=10, duplicates='drop')
@@ -590,6 +591,7 @@ def avaliar_modelo(X_train, y_train, X_test, y_test, modelo, nm_modelo):
 
     # Decile Analysis - Treino.
     scores_train = modelo.predict_proba(X_train)[:, 1]
+    scores_train = ((1 - scores_train) * 1000).round(0)
     noise = np.random.uniform(0, 0.0001, size=scores_train.shape)     # Adiciona um pequeno ruído.
     scores_train += noise
     deciles_train = pd.qcut(scores_train, q=10, duplicates='drop')
